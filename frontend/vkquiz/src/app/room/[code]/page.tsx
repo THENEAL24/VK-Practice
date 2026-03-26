@@ -2,59 +2,107 @@
 
 import Image from "next/image";
 import { Button } from "@vkontakte/vkui";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
-import { getRoomByCode, getQuizByCode, saveRoom, formatRoomCode } from "@/utils/storage";
-import type { Room, Quiz } from "@/utils/storage";
+import { getRoom, getQuiz, joinRoom, updateReady, startGame } from "@/utils/api";
+import type { RoomResponse, QuizResponse } from "@/utils/api";
 
-export default function RoomPage() {
+function RoomPageContent() {
     const router = useRouter();
     const params = useParams();
     const searchParams = useSearchParams();
     const code = (params.code as string)?.toUpperCase() || "";
     const isHost = searchParams.get('host') === 'true';
     
-    const [room, setRoom] = useState<Room | null>(null);
-    const [quiz, setQuiz] = useState<Quiz | null>(null);
+    const [room, setRoom] = useState<RoomResponse | null>(null);
+    const [quiz, setQuiz] = useState<QuizResponse | null>(null);
     const [isReady, setIsReady] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [playerId, setPlayerId] = useState<string>("");
 
-    // Загружаем данные комнаты и квиза
-    useEffect(() => {
-        const loadedRoom = getRoomByCode(code);
-        const loadedQuiz = getQuizByCode(code);
-        
-        if (!loadedRoom || !loadedQuiz) {
-            console.error("Комната или квиз не найдены");
-            // Можно перенаправить на главную
-            // router.push('/');
-            return;
+    const formatRoomCode = (c: string) => c.replace(/^(.{4})(.{4})$/, "$1-$2");
+
+    const loadData = useCallback(async () => {
+        try {
+            const [roomData, quizData] = await Promise.all([
+                getRoom(code),
+                getQuiz(code),
+            ]);
+            setRoom(roomData);
+            setQuiz(quizData);
+        } catch (err) {
+            console.error("Ошибка загрузки:", err);
+        } finally {
+            setLoading(false);
         }
-        
-        setRoom(loadedRoom);
-        setQuiz(loadedQuiz);
     }, [code]);
 
-    const handleReady = () => {
-        setIsReady(prev => !prev);
-        // TODO: Обновить статус игрока в комнате
+    useEffect(() => {
+        const storedId = localStorage.getItem("vk_quiz_player_id");
+        if (storedId) {
+            setPlayerId(storedId);
+        }
+
+        if (isHost) {
+            loadData();
+        } else {
+            const doJoin = async () => {
+                try {
+                    const roomData = await joinRoom(code, "Игрок");
+                    setRoom(roomData);
+                    const lastPlayer = roomData.players[roomData.players.length - 1];
+                    setPlayerId(lastPlayer.id);
+                    localStorage.setItem("vk_quiz_player_id", lastPlayer.id);
+                    const quizData = await getQuiz(code);
+                    setQuiz(quizData);
+                } catch (err) {
+                    console.error("Ошибка подключения:", err);
+                    alert("Не удалось присоединиться к комнате");
+                } finally {
+                    setLoading(false);
+                }
+            };
+            doJoin();
+        }
+    }, [code, isHost, loadData]);
+
+    // Polling for room updates
+    useEffect(() => {
+        const interval = setInterval(async () => {
+            try {
+                const roomData = await getRoom(code);
+                setRoom(roomData);
+                if (roomData.status === "playing") {
+                    router.push(`/game/${code}`);
+                }
+            } catch { /* ignore */ }
+        }, 2000);
+        return () => clearInterval(interval);
+    }, [code, router]);
+
+    const handleReady = async () => {
+        const newReady = !isReady;
+        setIsReady(newReady);
+        try {
+            const roomData = await updateReady(code, playerId, newReady);
+            setRoom(roomData);
+        } catch (err) {
+            console.error("Ошибка обновления готовности:", err);
+        }
     };
 
-    const handleStartGame = () => {
-        if (!room) return;
-        
-        // Обновляем статус комнаты
-        const updatedRoom: Room = {
-            ...room,
-            status: 'playing',
-        };
-        saveRoom(updatedRoom);
-        
-        // Переход на страницу игры
-        router.push(`/game/${code}`);
+    const handleStartGame = async () => {
+        try {
+            await startGame(code, playerId);
+            router.push(`/game/${code}`);
+        } catch (err) {
+            console.error("Ошибка старта:", err);
+            alert("Не удалось начать игру");
+        }
     };
 
-    if (!room || !quiz) {
+    if (loading || !room || !quiz) {
         return (
             <div className="w-screen h-screen flex items-center justify-center bg-linear-to-br from-blue-50 to-zinc-50">
                 <div className="text-center">
@@ -157,7 +205,6 @@ export default function RoomPage() {
                             </p>
 
                             {isHost ? (
-                                // Кнопки для хоста
                                 <div className="space-y-3">
                                     <Button
                                         onClick={handleStartGame}
@@ -166,18 +213,13 @@ export default function RoomPage() {
                                         🎮 Начать игру
                                     </Button>
                                     <Button
-                                        className="w-full py-3 bg-gray-200 text-gray-700 hover:bg-gray-300 rounded-xl font-semibold transition-all"
-                                    >
-                                        ⚙️ Настройки квиза
-                                    </Button>
-                                    <Button
+                                        onClick={() => navigator.clipboard.writeText(formatRoomCode(code))}
                                         className="w-full py-3 bg-blue-100 text-blue-600 hover:bg-blue-200 rounded-xl font-semibold transition-all"
                                     >
                                         📋 Скопировать код
                                     </Button>
                                 </div>
                             ) : (
-                                // Кнопка готовности для игрока
                                 <div className="space-y-3">
                                     <Button
                                         onClick={handleReady}
@@ -233,7 +275,6 @@ export default function RoomPage() {
                     </div>
 
                     {isHost ? (
-                        // Информация для хоста
                         <>
                             <div className="mt-8 p-4 bg-green-50 border-2 border-green-200 rounded-xl">
                                 <p className="text-sm font-semibold text-green-700 mb-2">
@@ -250,7 +291,6 @@ export default function RoomPage() {
                             </div>
                         </>
                     ) : (
-                        // Информация для игрока
                         <div className="mt-8 p-4 bg-gray-100 rounded-xl">
                             <p className="text-xs text-gray-600 text-center">
                                 💡 Вы находитесь в комнате <span className="font-semibold">{formatRoomCode(code)}</span>
@@ -260,5 +300,19 @@ export default function RoomPage() {
                 </div>
             </div>
         </div>
+    );
+}
+
+export default function RoomPage() {
+    return (
+        <Suspense
+            fallback={
+                <div className="w-screen h-screen flex items-center justify-center bg-linear-to-br from-blue-50 to-zinc-50">
+                    <p className="text-xl text-gray-600">Загрузка комнаты…</p>
+                </div>
+            }
+        >
+            <RoomPageContent />
+        </Suspense>
     );
 }

@@ -2,10 +2,10 @@
 
 import Image from "next/image";
 import { Button } from "@vkontakte/vkui";
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { saveQuiz, saveRoom, createDefaultPlayer, generateRoomCode } from "@/utils/storage";
-import type { Quiz, QuizQuestion as StorageQuestion, Room } from "@/utils/storage";
+import { createQuiz } from "@/utils/api";
+import type { QuestionDTO, AnswerDTO } from "@/utils/api";
 
 interface Question {
   id: number;
@@ -14,7 +14,7 @@ interface Question {
   correctAnswers: number[]; // Массив индексов правильных ответов
 }
 
-export default function CreateQuestionsPage() {
+function CreateQuestionsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   
@@ -104,57 +104,42 @@ export default function CreateQuestionsPage() {
     setQuestions(newQuestions);
   };
 
-  const handleFinish = () => {
-    // Генерируем код комнаты
-    const roomCode = generateRoomCode();
-    
-    // Преобразуем вопросы в формат хранилища
-    const quizQuestions: StorageQuestion[] = questions.map((q) => ({
-      id: q.id,
-      question: q.question,
-      answers: q.answers.map((text, idx) => ({
-        id: idx,
-        text: text,
-        isCorrect: q.correctAnswers.includes(idx),
-      })),
-    }));
-    
-    // Создаём объект квиза
-    const quiz: Quiz = {
-      code: roomCode,
-      settings: {
-        name: quizSettings.name,
-        difficulty: quizSettings.difficulty,
-        questionsCount: quizSettings.questionsCount,
-        timePerQuestion: quizSettings.timePerQuestion,
-        isPublic: quizSettings.isPublic,
-      },
-      questions: quizQuestions,
-      createdAt: new Date().toISOString(),
-    };
-    
-    // Сохраняем квиз
-    saveQuiz(quiz);
-    
-    // Создаём комнату
-    const hostPlayer = createDefaultPlayer("Вы (Хост)");
-    const room: Room = {
-      code: roomCode,
-      quizCode: roomCode,
-      hostId: hostPlayer.id,
-      players: [hostPlayer],
-      status: 'waiting',
-      currentQuestion: 0,
-    };
-    
-    // Сохраняем комнату
-    saveRoom(room);
-    
-    console.log("Квиз создан:", quiz);
-    console.log("Комната создана:", room);
-    
-    // Переходим в комнату как создатель (хост)
-    router.push(`/room/${roomCode}?host=true`);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleFinish = async () => {
+    setIsSubmitting(true);
+    try {
+      const apiQuestions: QuestionDTO[] = questions.map((q) => ({
+        id: q.id,
+        question: q.question,
+        answers: q.answers.map((text, idx): AnswerDTO => ({
+          id: idx,
+          text,
+          isCorrect: q.correctAnswers.includes(idx),
+        })),
+      }));
+
+      const resp = await createQuiz(
+        {
+          name: quizSettings.name,
+          difficulty: quizSettings.difficulty,
+          questionsCount: quizSettings.questionsCount,
+          timePerQuestion: quizSettings.timePerQuestion,
+          isPublic: quizSettings.isPublic,
+        },
+        apiQuestions
+      );
+
+      const hostId = resp.room.hostId;
+      localStorage.setItem("vk_quiz_player_id", hostId);
+
+      router.push(`/room/${resp.room.code}?host=true`);
+    } catch (err) {
+      console.error("Ошибка создания квиза:", err);
+      alert("Не удалось создать квиз. Проверьте соединение с сервером.");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const isQuestionValid = (q: Question) => {
@@ -351,5 +336,19 @@ export default function CreateQuestionsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function CreateQuestionsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="w-screen min-h-screen flex items-center justify-center bg-linear-to-br from-blue-50 to-zinc-50">
+          <p className="text-xl text-gray-600">Загрузка…</p>
+        </div>
+      }
+    >
+      <CreateQuestionsContent />
+    </Suspense>
   );
 }
