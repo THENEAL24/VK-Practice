@@ -4,6 +4,7 @@ import Image from "next/image";
 import { Button } from "@vkontakte/vkui";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { getResults } from "@/utils/api";
 
 interface LastResult {
   code: string;
@@ -21,12 +22,22 @@ export default function ResultsPage() {
   const [result, setResult] = useState<LastResult | null>(null);
 
   useEffect(() => {
-    const savedResult = localStorage.getItem('vk_quiz_last_result');
-    if (savedResult) {
-      const parsedResult = JSON.parse(savedResult);
-      setResult(parsedResult);
-    }
-  }, []);
+    const load = async () => {
+      try {
+        const results = await getResults(code);
+        if (results && results.length > 0) {
+          setResult(results[0]);
+          return;
+        }
+      } catch { /* fallback to localStorage */ }
+
+      const savedResult = localStorage.getItem('vk_quiz_last_result');
+      if (savedResult) {
+        setResult(JSON.parse(savedResult));
+      }
+    };
+    load();
+  }, [code]);
 
   if (!result) {
     return (
@@ -77,7 +88,6 @@ export default function ResultsPage() {
       <div className="flex items-center justify-center p-4 h-[calc(100vh-100px)]">
         <div className="w-full max-w-2xl">
           <div className="bg-white rounded-3xl shadow-xl p-8">
-            {/* Заголовок */}
             <div className="text-center mb-6">
               <h2 className="text-3xl font-bold text-gray-800 mb-2">
                 Игра завершена!
@@ -87,7 +97,6 @@ export default function ResultsPage() {
               </p>
             </div>
 
-            {/* Основной результат */}
             <div className="text-center mb-6">
               <div className="text-6xl mb-3">{grade.emoji}</div>
               <h3 className={`text-3xl font-bold mb-2 ${grade.color}`}>
@@ -101,7 +110,6 @@ export default function ResultsPage() {
               </p>
             </div>
 
-            {/* Детальная статистика */}
             <div className="grid grid-cols-2 gap-3 mb-6">
               <div className="bg-green-50 p-4 rounded-xl text-center">
                 <p className="text-2xl font-bold text-green-600 mb-1">
@@ -118,7 +126,6 @@ export default function ResultsPage() {
               </div>
             </div>
 
-            {/* Кнопки действий */}
             <div className="space-y-3">
               <Button
                 onClick={() => router.push(`/room/${code}?host=true`)}
@@ -138,6 +145,10 @@ export default function ResultsPage() {
                 </Button>
                 
                 <Button
+                  onClick={() => {
+                    const text = `Я прошёл квиз "${result.quizName}" — ${result.correctAnswers}/${result.totalQuestions} (${percentage}%)!`;
+                    navigator.clipboard.writeText(text);
+                  }}
                   className="py-3 bg-green-100 hover:bg-green-200 text-green-700 
                            rounded-xl font-semibold transition-all"
                 >
