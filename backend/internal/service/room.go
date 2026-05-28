@@ -44,6 +44,7 @@ func (s *RoomService) GetRoom(ctx context.Context, code string) (*model.RoomResp
 			Name:    p.Name,
 			IsReady: p.IsReady,
 			Score:   int(p.Score),
+			UserID:  uuidToString(p.UserID),
 		})
 	}
 
@@ -57,7 +58,7 @@ func (s *RoomService) GetRoom(ctx context.Context, code string) (*model.RoomResp
 	}, nil
 }
 
-func (s *RoomService) JoinRoom(ctx context.Context, code string, playerName string) (*model.RoomResponse, error) {
+func (s *RoomService) JoinRoom(ctx context.Context, code string, req model.JoinRoomRequest) (*model.RoomResponse, error) {
 	room, err := s.q.GetRoomByCode(ctx, code)
 	if err != nil {
 		return nil, fmt.Errorf("get room: %w", err)
@@ -67,8 +68,34 @@ func (s *RoomService) JoinRoom(ctx context.Context, code string, playerName stri
 		return nil, fmt.Errorf("room is not accepting players (status: %s)", room.Status)
 	}
 
+	playerName := req.PlayerName
+	userUUID := optionalUUID(req.UserID)
+
+	if userUUID.Valid {
+		if existing, err := s.q.GetPlayerByRoomAndUser(ctx, sqlc.GetPlayerByRoomAndUserParams{
+			RoomID: room.ID,
+			UserID: userUUID,
+		}); err == nil {
+			if playerName != "" && playerName != existing.Name {
+				_, _ = s.q.UpdatePlayerName(ctx, sqlc.UpdatePlayerNameParams{
+					ID:   existing.ID,
+					Name: playerName,
+				})
+			}
+			return s.GetRoom(ctx, code)
+		}
+		if u, err := s.q.GetUserByID(ctx, userUUID); err == nil && playerName == "" {
+			playerName = u.Name
+		}
+	}
+
+	if playerName == "" {
+		playerName = "Игрок"
+	}
+
 	_, err = s.q.CreatePlayer(ctx, sqlc.CreatePlayerParams{
 		RoomID:  room.ID,
+		UserID:  userUUID,
 		Name:    playerName,
 		IsReady: false,
 		Score:   0,

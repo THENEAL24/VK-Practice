@@ -4,7 +4,13 @@ import (
 	"net/http"
 )
 
-func NewRouter(quiz *QuizHandler, room *RoomHandler, game *GameHandler) *http.ServeMux {
+func NewRouter(
+	quiz *QuizHandler,
+	room *RoomHandler,
+	game *GameHandler,
+	user *UserHandler,
+	auth *AuthHandler,
+) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Health check
@@ -12,9 +18,26 @@ func NewRouter(quiz *QuizHandler, room *RoomHandler, game *GameHandler) *http.Se
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	// Auth endpoints
+	mux.HandleFunc("POST /api/auth/register", auth.Register)
+	mux.HandleFunc("POST /api/auth/verify", auth.Verify)
+	mux.HandleFunc("POST /api/auth/resend", auth.Resend)
+	mux.HandleFunc("POST /api/auth/login", auth.Login)
+	mux.HandleFunc("POST /api/auth/vk", auth.VKLogin)
+	mux.HandleFunc("POST /api/auth/logout", auth.Logout)
+	mux.HandleFunc("GET /api/auth/me", auth.Me)
+
+	// User endpoints
+	mux.HandleFunc("POST /api/users", user.Create)
+	mux.HandleFunc("GET /api/users/{id}", user.Get)
+	mux.HandleFunc("PATCH /api/users/{id}", user.Update)
+	mux.HandleFunc("GET /api/users/{id}/history", user.History)
+
 	// Quiz endpoints
+	mux.HandleFunc("GET /api/quizzes", quiz.List)
 	mux.HandleFunc("POST /api/quizzes", quiz.Create)
 	mux.HandleFunc("GET /api/quizzes/{code}", quiz.GetByCode)
+	mux.HandleFunc("POST /api/quizzes/{code}/launch", quiz.Launch)
 	mux.HandleFunc("DELETE /api/quizzes/{code}", quiz.Delete)
 
 	// Room endpoints

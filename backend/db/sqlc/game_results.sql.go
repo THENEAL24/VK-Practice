@@ -12,14 +12,18 @@ import (
 )
 
 const createGameResult = `-- name: CreateGameResult :one
-INSERT INTO game_results (room_id, player_id, score, correct_answers, total_questions)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, room_id, player_id, score, correct_answers, total_questions, finished_at
+INSERT INTO game_results (room_id, player_id, user_id, quiz_id, player_name, quiz_name, score, correct_answers, total_questions)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, room_id, player_id, user_id, quiz_id, player_name, quiz_name, score, correct_answers, total_questions, finished_at
 `
 
 type CreateGameResultParams struct {
 	RoomID         pgtype.UUID `json:"room_id"`
 	PlayerID       pgtype.UUID `json:"player_id"`
+	UserID         pgtype.UUID `json:"user_id"`
+	QuizID         pgtype.UUID `json:"quiz_id"`
+	PlayerName     string      `json:"player_name"`
+	QuizName       string      `json:"quiz_name"`
 	Score          int32       `json:"score"`
 	CorrectAnswers int32       `json:"correct_answers"`
 	TotalQuestions int32       `json:"total_questions"`
@@ -29,6 +33,10 @@ func (q *Queries) CreateGameResult(ctx context.Context, arg CreateGameResultPara
 	row := q.db.QueryRow(ctx, createGameResult,
 		arg.RoomID,
 		arg.PlayerID,
+		arg.UserID,
+		arg.QuizID,
+		arg.PlayerName,
+		arg.QuizName,
 		arg.Score,
 		arg.CorrectAnswers,
 		arg.TotalQuestions,
@@ -38,6 +46,10 @@ func (q *Queries) CreateGameResult(ctx context.Context, arg CreateGameResultPara
 		&i.ID,
 		&i.RoomID,
 		&i.PlayerID,
+		&i.UserID,
+		&i.QuizID,
+		&i.PlayerName,
+		&i.QuizName,
 		&i.Score,
 		&i.CorrectAnswers,
 		&i.TotalQuestions,
@@ -47,7 +59,7 @@ func (q *Queries) CreateGameResult(ctx context.Context, arg CreateGameResultPara
 }
 
 const getGameResultByPlayer = `-- name: GetGameResultByPlayer :one
-SELECT id, room_id, player_id, score, correct_answers, total_questions, finished_at FROM game_results WHERE room_id = $1 AND player_id = $2
+SELECT id, room_id, player_id, user_id, quiz_id, player_name, quiz_name, score, correct_answers, total_questions, finished_at FROM game_results WHERE room_id = $1 AND player_id = $2
 `
 
 type GetGameResultByPlayerParams struct {
@@ -62,6 +74,10 @@ func (q *Queries) GetGameResultByPlayer(ctx context.Context, arg GetGameResultBy
 		&i.ID,
 		&i.RoomID,
 		&i.PlayerID,
+		&i.UserID,
+		&i.QuizID,
+		&i.PlayerName,
+		&i.QuizName,
 		&i.Score,
 		&i.CorrectAnswers,
 		&i.TotalQuestions,
@@ -71,7 +87,7 @@ func (q *Queries) GetGameResultByPlayer(ctx context.Context, arg GetGameResultBy
 }
 
 const getGameResultsByRoomID = `-- name: GetGameResultsByRoomID :many
-SELECT id, room_id, player_id, score, correct_answers, total_questions, finished_at FROM game_results WHERE room_id = $1 ORDER BY score DESC
+SELECT id, room_id, player_id, user_id, quiz_id, player_name, quiz_name, score, correct_answers, total_questions, finished_at FROM game_results WHERE room_id = $1 ORDER BY score DESC, finished_at ASC
 `
 
 func (q *Queries) GetGameResultsByRoomID(ctx context.Context, roomID pgtype.UUID) ([]GameResult, error) {
@@ -87,6 +103,51 @@ func (q *Queries) GetGameResultsByRoomID(ctx context.Context, roomID pgtype.UUID
 			&i.ID,
 			&i.RoomID,
 			&i.PlayerID,
+			&i.UserID,
+			&i.QuizID,
+			&i.PlayerName,
+			&i.QuizName,
+			&i.Score,
+			&i.CorrectAnswers,
+			&i.TotalQuestions,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getGameResultsByUserID = `-- name: GetGameResultsByUserID :many
+SELECT id, room_id, player_id, user_id, quiz_id, player_name, quiz_name, score, correct_answers, total_questions, finished_at FROM game_results WHERE user_id = $1 ORDER BY finished_at DESC LIMIT $2
+`
+
+type GetGameResultsByUserIDParams struct {
+	UserID pgtype.UUID `json:"user_id"`
+	Limit  int32       `json:"limit"`
+}
+
+func (q *Queries) GetGameResultsByUserID(ctx context.Context, arg GetGameResultsByUserIDParams) ([]GameResult, error) {
+	rows, err := q.db.Query(ctx, getGameResultsByUserID, arg.UserID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GameResult{}
+	for rows.Next() {
+		var i GameResult
+		if err := rows.Scan(
+			&i.ID,
+			&i.RoomID,
+			&i.PlayerID,
+			&i.UserID,
+			&i.QuizID,
+			&i.PlayerName,
+			&i.QuizName,
 			&i.Score,
 			&i.CorrectAnswers,
 			&i.TotalQuestions,

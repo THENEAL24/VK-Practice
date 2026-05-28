@@ -12,18 +12,19 @@ import (
 )
 
 const createQuiz = `-- name: CreateQuiz :one
-INSERT INTO quizzes (code, name, difficulty, questions_count, time_per_question, is_public)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, code, name, difficulty, questions_count, time_per_question, is_public, created_at
+INSERT INTO quizzes (code, name, difficulty, questions_count, time_per_question, is_public, author_user_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, code, name, difficulty, questions_count, time_per_question, is_public, author_user_id, created_at
 `
 
 type CreateQuizParams struct {
-	Code            string `json:"code"`
-	Name            string `json:"name"`
-	Difficulty      string `json:"difficulty"`
-	QuestionsCount  int32  `json:"questions_count"`
-	TimePerQuestion int32  `json:"time_per_question"`
-	IsPublic        bool   `json:"is_public"`
+	Code            string      `json:"code"`
+	Name            string      `json:"name"`
+	Difficulty      string      `json:"difficulty"`
+	QuestionsCount  int32       `json:"questions_count"`
+	TimePerQuestion int32       `json:"time_per_question"`
+	IsPublic        bool        `json:"is_public"`
+	AuthorUserID    pgtype.UUID `json:"author_user_id"`
 }
 
 func (q *Queries) CreateQuiz(ctx context.Context, arg CreateQuizParams) (Quiz, error) {
@@ -34,6 +35,7 @@ func (q *Queries) CreateQuiz(ctx context.Context, arg CreateQuizParams) (Quiz, e
 		arg.QuestionsCount,
 		arg.TimePerQuestion,
 		arg.IsPublic,
+		arg.AuthorUserID,
 	)
 	var i Quiz
 	err := row.Scan(
@@ -44,6 +46,7 @@ func (q *Queries) CreateQuiz(ctx context.Context, arg CreateQuizParams) (Quiz, e
 		&i.QuestionsCount,
 		&i.TimePerQuestion,
 		&i.IsPublic,
+		&i.AuthorUserID,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -59,7 +62,7 @@ func (q *Queries) DeleteQuiz(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getQuizByCode = `-- name: GetQuizByCode :one
-SELECT id, code, name, difficulty, questions_count, time_per_question, is_public, created_at FROM quizzes WHERE code = $1
+SELECT id, code, name, difficulty, questions_count, time_per_question, is_public, author_user_id, created_at FROM quizzes WHERE code = $1
 `
 
 func (q *Queries) GetQuizByCode(ctx context.Context, code string) (Quiz, error) {
@@ -73,13 +76,14 @@ func (q *Queries) GetQuizByCode(ctx context.Context, code string) (Quiz, error) 
 		&i.QuestionsCount,
 		&i.TimePerQuestion,
 		&i.IsPublic,
+		&i.AuthorUserID,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getQuizByID = `-- name: GetQuizByID :one
-SELECT id, code, name, difficulty, questions_count, time_per_question, is_public, created_at FROM quizzes WHERE id = $1
+SELECT id, code, name, difficulty, questions_count, time_per_question, is_public, author_user_id, created_at FROM quizzes WHERE id = $1
 `
 
 func (q *Queries) GetQuizByID(ctx context.Context, id pgtype.UUID) (Quiz, error) {
@@ -93,13 +97,14 @@ func (q *Queries) GetQuizByID(ctx context.Context, id pgtype.UUID) (Quiz, error)
 		&i.QuestionsCount,
 		&i.TimePerQuestion,
 		&i.IsPublic,
+		&i.AuthorUserID,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const listPublicQuizzes = `-- name: ListPublicQuizzes :many
-SELECT id, code, name, difficulty, questions_count, time_per_question, is_public, created_at FROM quizzes WHERE is_public = true ORDER BY created_at DESC LIMIT $1 OFFSET $2
+SELECT id, code, name, difficulty, questions_count, time_per_question, is_public, author_user_id, created_at FROM quizzes WHERE is_public = true ORDER BY created_at DESC LIMIT $1 OFFSET $2
 `
 
 type ListPublicQuizzesParams struct {
@@ -124,6 +129,41 @@ func (q *Queries) ListPublicQuizzes(ctx context.Context, arg ListPublicQuizzesPa
 			&i.QuestionsCount,
 			&i.TimePerQuestion,
 			&i.IsPublic,
+			&i.AuthorUserID,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listQuizzesByAuthor = `-- name: ListQuizzesByAuthor :many
+SELECT id, code, name, difficulty, questions_count, time_per_question, is_public, author_user_id, created_at FROM quizzes WHERE author_user_id = $1 ORDER BY created_at DESC
+`
+
+func (q *Queries) ListQuizzesByAuthor(ctx context.Context, authorUserID pgtype.UUID) ([]Quiz, error) {
+	rows, err := q.db.Query(ctx, listQuizzesByAuthor, authorUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Quiz{}
+	for rows.Next() {
+		var i Quiz
+		if err := rows.Scan(
+			&i.ID,
+			&i.Code,
+			&i.Name,
+			&i.Difficulty,
+			&i.QuestionsCount,
+			&i.TimePerQuestion,
+			&i.IsPublic,
+			&i.AuthorUserID,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

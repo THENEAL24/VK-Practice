@@ -12,13 +12,14 @@ import (
 )
 
 const createPlayer = `-- name: CreatePlayer :one
-INSERT INTO players (room_id, name, is_ready, score)
-VALUES ($1, $2, $3, $4)
-RETURNING id, room_id, name, is_ready, score
+INSERT INTO players (room_id, user_id, name, is_ready, score)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, room_id, user_id, name, is_ready, score
 `
 
 type CreatePlayerParams struct {
 	RoomID  pgtype.UUID `json:"room_id"`
+	UserID  pgtype.UUID `json:"user_id"`
 	Name    string      `json:"name"`
 	IsReady bool        `json:"is_ready"`
 	Score   int32       `json:"score"`
@@ -27,6 +28,7 @@ type CreatePlayerParams struct {
 func (q *Queries) CreatePlayer(ctx context.Context, arg CreatePlayerParams) (Player, error) {
 	row := q.db.QueryRow(ctx, createPlayer,
 		arg.RoomID,
+		arg.UserID,
 		arg.Name,
 		arg.IsReady,
 		arg.Score,
@@ -35,6 +37,7 @@ func (q *Queries) CreatePlayer(ctx context.Context, arg CreatePlayerParams) (Pla
 	err := row.Scan(
 		&i.ID,
 		&i.RoomID,
+		&i.UserID,
 		&i.Name,
 		&i.IsReady,
 		&i.Score,
@@ -52,7 +55,7 @@ func (q *Queries) DeletePlayer(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getPlayerByID = `-- name: GetPlayerByID :one
-SELECT id, room_id, name, is_ready, score FROM players WHERE id = $1
+SELECT id, room_id, user_id, name, is_ready, score FROM players WHERE id = $1
 `
 
 func (q *Queries) GetPlayerByID(ctx context.Context, id pgtype.UUID) (Player, error) {
@@ -61,6 +64,30 @@ func (q *Queries) GetPlayerByID(ctx context.Context, id pgtype.UUID) (Player, er
 	err := row.Scan(
 		&i.ID,
 		&i.RoomID,
+		&i.UserID,
+		&i.Name,
+		&i.IsReady,
+		&i.Score,
+	)
+	return i, err
+}
+
+const getPlayerByRoomAndUser = `-- name: GetPlayerByRoomAndUser :one
+SELECT id, room_id, user_id, name, is_ready, score FROM players WHERE room_id = $1 AND user_id = $2
+`
+
+type GetPlayerByRoomAndUserParams struct {
+	RoomID pgtype.UUID `json:"room_id"`
+	UserID pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) GetPlayerByRoomAndUser(ctx context.Context, arg GetPlayerByRoomAndUserParams) (Player, error) {
+	row := q.db.QueryRow(ctx, getPlayerByRoomAndUser, arg.RoomID, arg.UserID)
+	var i Player
+	err := row.Scan(
+		&i.ID,
+		&i.RoomID,
+		&i.UserID,
 		&i.Name,
 		&i.IsReady,
 		&i.Score,
@@ -69,7 +96,7 @@ func (q *Queries) GetPlayerByID(ctx context.Context, id pgtype.UUID) (Player, er
 }
 
 const getPlayersByRoomID = `-- name: GetPlayersByRoomID :many
-SELECT id, room_id, name, is_ready, score FROM players WHERE room_id = $1
+SELECT id, room_id, user_id, name, is_ready, score FROM players WHERE room_id = $1
 `
 
 func (q *Queries) GetPlayersByRoomID(ctx context.Context, roomID pgtype.UUID) ([]Player, error) {
@@ -84,6 +111,7 @@ func (q *Queries) GetPlayersByRoomID(ctx context.Context, roomID pgtype.UUID) ([
 		if err := rows.Scan(
 			&i.ID,
 			&i.RoomID,
+			&i.UserID,
 			&i.Name,
 			&i.IsReady,
 			&i.Score,
@@ -98,9 +126,33 @@ func (q *Queries) GetPlayersByRoomID(ctx context.Context, roomID pgtype.UUID) ([
 	return items, nil
 }
 
+const updatePlayerName = `-- name: UpdatePlayerName :one
+UPDATE players SET name = $2 WHERE id = $1
+RETURNING id, room_id, user_id, name, is_ready, score
+`
+
+type UpdatePlayerNameParams struct {
+	ID   pgtype.UUID `json:"id"`
+	Name string      `json:"name"`
+}
+
+func (q *Queries) UpdatePlayerName(ctx context.Context, arg UpdatePlayerNameParams) (Player, error) {
+	row := q.db.QueryRow(ctx, updatePlayerName, arg.ID, arg.Name)
+	var i Player
+	err := row.Scan(
+		&i.ID,
+		&i.RoomID,
+		&i.UserID,
+		&i.Name,
+		&i.IsReady,
+		&i.Score,
+	)
+	return i, err
+}
+
 const updatePlayerReady = `-- name: UpdatePlayerReady :one
 UPDATE players SET is_ready = $2 WHERE id = $1
-RETURNING id, room_id, name, is_ready, score
+RETURNING id, room_id, user_id, name, is_ready, score
 `
 
 type UpdatePlayerReadyParams struct {
@@ -114,6 +166,7 @@ func (q *Queries) UpdatePlayerReady(ctx context.Context, arg UpdatePlayerReadyPa
 	err := row.Scan(
 		&i.ID,
 		&i.RoomID,
+		&i.UserID,
 		&i.Name,
 		&i.IsReady,
 		&i.Score,
@@ -123,7 +176,7 @@ func (q *Queries) UpdatePlayerReady(ctx context.Context, arg UpdatePlayerReadyPa
 
 const updatePlayerScore = `-- name: UpdatePlayerScore :one
 UPDATE players SET score = $2 WHERE id = $1
-RETURNING id, room_id, name, is_ready, score
+RETURNING id, room_id, user_id, name, is_ready, score
 `
 
 type UpdatePlayerScoreParams struct {
@@ -137,6 +190,7 @@ func (q *Queries) UpdatePlayerScore(ctx context.Context, arg UpdatePlayerScorePa
 	err := row.Scan(
 		&i.ID,
 		&i.RoomID,
+		&i.UserID,
 		&i.Name,
 		&i.IsReady,
 		&i.Score,
