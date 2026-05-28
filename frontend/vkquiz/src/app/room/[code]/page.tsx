@@ -2,12 +2,15 @@
 
 import Image from "next/image";
 import { Button } from "@vkontakte/vkui";
-import { useState, useEffect, useCallback, Suspense } from "react";
+import { useState, useEffect, useCallback, Suspense, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import { getRoom, getQuiz, joinRoom, updateReady, startGame } from "@/utils/api";
 import type { RoomResponse, QuizResponse } from "@/utils/api";
+import { ApiError } from "@/utils/api";
 import { ensureProfile, savePlayerId, getPlayerId, formatRoomCode } from "@/utils/storage";
+import { connectRoomSocket } from "@/utils/ws";
+import type { WsEnvelope } from "@/utils/ws";
 
 function RoomPageContent() {
     const router = useRouter();
@@ -21,14 +24,35 @@ function RoomPageContent() {
     const [isReady, setIsReady] = useState(false);
     const [loading, setLoading] = useState(true);
     const [playerId, setPlayerId] = useState<string>("");
+    const navigatedRef = useRef(false);
+
+    const goToGame = useCallback(() => {
+        if (navigatedRef.current) return;
+        navigatedRef.current = true;
+        router.push(`/game/${code}`);
+    }, [code, router]);
+
+    const applyRoom = useCallback((roomData: RoomResponse) => {
+        setRoom(roomData);
+        if (roomData.status === "playing") {
+            goToGame();
+        }
+    }, [goToGame]);
+
+    // Sync local ready state when room updates via WebSocket.
+    useEffect(() => {
+        if (!room || !playerId || isHost) return;
+        const mine = room.players.find((p) => p.id === playerId);
+        if (mine) setIsReady(mine.isReady);
+    }, [room, playerId, isHost]);
 
     const loadRoomAndQuiz = useCallback(async (): Promise<{ room: RoomResponse; quiz: QuizResponse } | null> => {
         const roomData = await getRoom(code);
         const quizData = await getQuiz(roomData.quizCode);
-        setRoom(roomData);
+        applyRoom(roomData);
         setQuiz(quizData);
         return { room: roomData, quiz: quizData };
-    }, [code]);
+    }, [code, applyRoom]);
 
     useEffect(() => {
         const init = async () => {
@@ -48,7 +72,7 @@ function RoomPageContent() {
                     }
                 } else {
                     const roomData = await joinRoom(code, profile.name, profile.id);
-                    setRoom(roomData);
+                    applyRoom(roomData);
                     const mine = roomData.players.find((p) => p.userId === profile.id)
                         || roomData.players[roomData.players.length - 1];
                     if (mine) {
@@ -66,28 +90,23 @@ function RoomPageContent() {
             }
         };
         init();
-    }, [code, isHost, loadRoomAndQuiz]);
+    }, [code, isHost, loadRoomAndQuiz, applyRoom]);
 
-    // Polling for room updates
     useEffect(() => {
-        const interval = setInterval(async () => {
-            try {
-                const roomData = await getRoom(code);
-                setRoom(roomData);
-                if (roomData.status === "playing") {
-                    router.push(`/game/${code}`);
-                }
-            } catch { /* ignore */ }
-        }, 2000);
-        return () => clearInterval(interval);
-    }, [code, router]);
+        const disconnect = connectRoomSocket(code, (msg: WsEnvelope) => {
+            if (msg.type === "room:state") {
+                applyRoom(msg.data as RoomResponse);
+            }
+        });
+        return disconnect;
+    }, [code, applyRoom]);
 
     const handleReady = async () => {
         const newReady = !isReady;
         setIsReady(newReady);
         try {
             const roomData = await updateReady(code, playerId, newReady);
-            setRoom(roomData);
+            applyRoom(roomData);
         } catch (err) {
             console.error("Ошибка обновления готовности:", err);
         }
@@ -96,12 +115,23 @@ function RoomPageContent() {
     const handleStartGame = async () => {
         try {
             await startGame(code, playerId);
-            router.push(`/game/${code}`);
+            goToGame();
         } catch (err) {
             console.error("Ошибка старта:", err);
-            alert("Не удалось начать игру");
+            const message =
+                err instanceof ApiError
+                    ? err.message === "not all players are ready"
+                        ? "Не все игроки готовы. Дождитесь, пока каждый нажмёт «Приготовиться»."
+                        : err.message
+                    : "Не удалось начать игру";
+            alert(message);
         }
     };
+
+    const nonHostPlayers = room?.players.filter((p) => p.id !== room.hostId) ?? [];
+    const othersReady = nonHostPlayers.every((p) => p.isReady);
+    const waitingCount = nonHostPlayers.filter((p) => !p.isReady).length;
+    const canStart = nonHostPlayers.length === 0 || othersReady;
 
     if (loading || !room || !quiz) {
         return (
@@ -166,20 +196,9 @@ function RoomPageContent() {
                                         {player.isReady ? "✓ Готов" : "⏳ Не готов"}
                                     </p>
                                 </div>
-                                {isHost && player.id !== room.hostId && (
-                                    <button className="text-red-500 hover:text-red-700 text-sm">
-                                        ✕
-                                    </button>
-                                )}
                             </div>
                         ))}
                     </div>
-
-                    {isHost && (
-                        <Button className="w-full mt-6 py-3 bg-blue-100 text-blue-600 hover:bg-blue-200 rounded-xl font-semibold transition-all">
-                            + Пригласить игроков
-                        </Button>
-                    )}
                 </div>
 
                 <div className="flex-1 flex items-center justify-center p-8 bg-opacity-50">
@@ -189,7 +208,13 @@ function RoomPageContent() {
                                 {isHost ? "Готовы начать?" : "Ожидание начала игры"}
                             </h3>
                             <p className="text-lg text-gray-500">
-                                {isHost ? "Все игроки готовы, можно начинать!" : "Ждём пока хост начнёт игру..."}
+                                {isHost
+                                    ? canStart
+                                        ? "Все игроки готовы — можно начинать!"
+                                        : nonHostPlayers.length === 0
+                                        ? "Пригласите игроков в комнату"
+                                        : `Ждём готовности: ${waitingCount} из ${nonHostPlayers.length} ещё не готовы`
+                                    : "Ждём пока хост начнёт игру..."}
                             </p>
                         </div>
 
@@ -205,10 +230,29 @@ function RoomPageContent() {
                                 <div className="space-y-3">
                                     <Button
                                         onClick={handleStartGame}
-                                        className="w-full py-4 bg-green-500 text-white hover:bg-green-600 rounded-xl font-semibold transition-all text-xl"
+                                        disabled={!canStart}
+                                        className={`w-full py-4 rounded-xl font-semibold transition-all duration-300 text-xl
+                                            ${canStart
+                                                ? "bg-green-500 text-white hover:bg-green-600"
+                                                : "bg-gray-200 text-gray-500 cursor-not-allowed"
+                                            }`}
                                     >
-                                        🎮 Начать игру
+                                        {canStart
+                                            ? "🎮 Начать игру"
+                                            : nonHostPlayers.length === 0
+                                            ? "⏳ Ожидаем игроков"
+                                            : `⏳ Ждём готовности (${waitingCount})`}
                                     </Button>
+                                    {!canStart && nonHostPlayers.length > 0 && (
+                                        <p className="text-sm text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                                            Старт откроется, когда все участники нажмут «Приготовиться»
+                                        </p>
+                                    )}
+                                    {canStart && (
+                                        <p className="text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">
+                                            Все участники готовы — нажмите, чтобы начать
+                                        </p>
+                                    )}
                                     <Button
                                         onClick={() => navigator.clipboard.writeText(formatRoomCode(code))}
                                         className="w-full py-3 bg-blue-100 text-blue-600 hover:bg-blue-200 rounded-xl font-semibold transition-all"
@@ -260,39 +304,7 @@ function RoomPageContent() {
                             <p className="text-xs text-gray-500 mb-1">Время на вопрос</p>
                             <p className="text-3xl font-bold text-green-600">{quiz.settings.timePerQuestion} сек</p>
                         </div>
-
-                        <div className="p-4 bg-white border-gray-200 border rounded-xl">
-                            <p className="text-xs text-gray-500 mb-1">Сложность</p>
-                            <p className="text-lg font-bold text-purple-600">
-                                {quiz.settings.difficulty === 'easy' ? 'Лёгкая' :
-                                 quiz.settings.difficulty === 'medium' ? 'Средняя' : 'Сложная'}
-                            </p>
-                        </div>
                     </div>
-
-                    {isHost ? (
-                        <>
-                            <div className="mt-8 p-4 bg-green-50 border-2 border-green-200 rounded-xl">
-                                <p className="text-sm font-semibold text-green-700 mb-2">
-                                    🎯 Код для приглашения:
-                                </p>
-                                <p className="text-2xl font-bold text-green-800 text-center tracking-wider">
-                                    {formatRoomCode(code)}
-                                </p>
-                            </div>
-                            <div className="mt-4 p-4 bg-blue-50 rounded-xl">
-                                <p className="text-xs text-gray-600 text-center">
-                                    💡 Поделитесь этим кодом со своими друзьями для приглашения в игру
-                                </p>
-                            </div>
-                        </>
-                    ) : (
-                        <div className="mt-8 p-4 bg-gray-100 rounded-xl">
-                            <p className="text-xs text-gray-600 text-center">
-                                💡 Вы находитесь в комнате <span className="font-semibold">{formatRoomCode(code)}</span>
-                            </p>
-                        </div>
-                    )}
                 </div>
             </div>
         </div>

@@ -1,18 +1,26 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/THENEAL24/VK-Practice/backend/internal/model"
 	"github.com/THENEAL24/VK-Practice/backend/internal/service"
+	"github.com/THENEAL24/VK-Practice/backend/internal/ws"
 )
+
+type RoomBroadcaster interface {
+	BroadcastRoom(ctx context.Context, roomCode string)
+	StartGame(ctx context.Context, roomCode string)
+}
 
 type RoomHandler struct {
 	svc *service.RoomService
+	hub RoomBroadcaster
 }
 
-func NewRoomHandler(svc *service.RoomService) *RoomHandler {
-	return &RoomHandler{svc: svc}
+func NewRoomHandler(svc *service.RoomService, hub RoomBroadcaster) *RoomHandler {
+	return &RoomHandler{svc: svc, hub: hub}
 }
 
 func (h *RoomHandler) Get(w http.ResponseWriter, r *http.Request) {
@@ -58,6 +66,10 @@ func (h *RoomHandler) Join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.hub != nil {
+		h.hub.BroadcastRoom(r.Context(), code)
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -76,6 +88,10 @@ func (h *RoomHandler) UpdateReady(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.hub != nil {
+		h.hub.BroadcastRoom(r.Context(), code)
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -92,6 +108,11 @@ func (h *RoomHandler) Start(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	if h.hub != nil {
+		h.hub.BroadcastRoom(r.Context(), code)
+		h.hub.StartGame(r.Context(), code)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -113,5 +134,12 @@ func (h *RoomHandler) KickPlayer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.hub != nil {
+		h.hub.BroadcastRoom(r.Context(), code)
+	}
+
 	writeJSON(w, http.StatusOK, resp)
 }
+
+// Ensure ws.Hub satisfies RoomBroadcaster at compile time.
+var _ RoomBroadcaster = (*ws.Hub)(nil)

@@ -4,8 +4,9 @@ import Image from "next/image";
 import { Button } from "@vkontakte/vkui";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { getLeaderboard, GameResultResponse } from "@/utils/api";
+import { getLeaderboard, GameResultResponse, LeaderboardResponse } from "@/utils/api";
 import { getPlayerId, getProfile } from "@/utils/storage";
+import { connectRoomSocket } from "@/utils/ws";
 
 export default function ResultsPage() {
   const router = useRouter();
@@ -61,8 +62,18 @@ export default function ResultsPage() {
     if (p) setMyUserId(p.id);
 
     fetchLeaderboard();
-    const interval = setInterval(fetchLeaderboard, 3000);
-    return () => clearInterval(interval);
+
+    const disconnect = connectRoomSocket(code, (msg) => {
+      if (msg.type === "leaderboard:update") {
+        const board = msg.data as LeaderboardResponse;
+        setEntries(board.entries || []);
+        setQuizName(board.quizName);
+        setError(null);
+        setLoading(false);
+      }
+    });
+
+    return disconnect;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code]);
 
@@ -164,7 +175,7 @@ export default function ResultsPage() {
 
               {entries.length === 0 ? (
                 <p className="text-center text-gray-500 py-12">
-                  Пока никто не завершил квиз. Подождите...
+                  Пока никто не завершил квиз. Другие игроки могут ещё проходить — таблица обновится, когда они закончат.
                 </p>
               ) : (
                 <div className="space-y-2">

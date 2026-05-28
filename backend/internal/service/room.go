@@ -136,6 +136,24 @@ func (s *RoomService) StartGame(ctx context.Context, code string, req model.Star
 		return nil, fmt.Errorf("only the host can start the game")
 	}
 
+	if room.Status != "waiting" {
+		return nil, fmt.Errorf("game has already started")
+	}
+
+	players, err := s.q.GetPlayersByRoomID(ctx, room.ID)
+	if err != nil {
+		return nil, fmt.Errorf("get players: %w", err)
+	}
+
+	for _, p := range players {
+		if uuidToString(p.ID) == hostID {
+			continue
+		}
+		if !p.IsReady {
+			return nil, fmt.Errorf("not all players are ready")
+		}
+	}
+
 	_, err = s.q.UpdateRoomStatus(ctx, sqlc.UpdateRoomStatusParams{
 		ID:              room.ID,
 		Status:          "playing",
@@ -164,6 +182,22 @@ func (s *RoomService) FinishGame(ctx context.Context, code string) (*model.RoomR
 	}
 
 	return s.GetRoom(ctx, code)
+}
+
+func (s *RoomService) GetQuizTiming(ctx context.Context, roomCode string) (timePerQuestion int, totalQuestions int, err error) {
+	room, err := s.q.GetRoomByCode(ctx, roomCode)
+	if err != nil {
+		return 0, 0, fmt.Errorf("get room: %w", err)
+	}
+	quiz, err := s.q.GetQuizByID(ctx, room.QuizID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("get quiz: %w", err)
+	}
+	questions, err := s.q.GetQuestionsByQuizID(ctx, quiz.ID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("get questions: %w", err)
+	}
+	return int(quiz.TimePerQuestion), len(questions), nil
 }
 
 func (s *RoomService) KickPlayer(ctx context.Context, code string, hostPlayerID string, targetPlayerID string) (*model.RoomResponse, error) {

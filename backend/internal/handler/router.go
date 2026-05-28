@@ -2,6 +2,8 @@ package handler
 
 import (
 	"net/http"
+
+	"github.com/THENEAL24/VK-Practice/backend/internal/ws"
 )
 
 func NewRouter(
@@ -10,8 +12,14 @@ func NewRouter(
 	game *GameHandler,
 	user *UserHandler,
 	auth *AuthHandler,
+	wsHandler *ws.Handler,
 ) *http.ServeMux {
 	mux := http.NewServeMux()
+
+	// WebSocket
+	if wsHandler != nil {
+		mux.HandleFunc("GET /api/ws/rooms/{code}", wsHandler.ServeWS)
+	}
 
 	// Health check
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {

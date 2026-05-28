@@ -9,9 +9,16 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type GameHub interface {
+	CanAnswer(roomCode, playerID string, questionIndex, totalQuestions int) error
+	MarkAnswered(roomCode, playerID string, questionIndex int)
+	BroadcastLeaderboard(ctx context.Context, roomCode string)
+}
+
 type GameService struct {
 	pool *pgxpool.Pool
 	q    *sqlc.Queries
+	hub  GameHub
 }
 
 func NewGameService(pool *pgxpool.Pool) *GameService {
@@ -21,10 +28,18 @@ func NewGameService(pool *pgxpool.Pool) *GameService {
 	}
 }
 
+func (s *GameService) SetHub(hub GameHub) {
+	s.hub = hub
+}
+
 func (s *GameService) SubmitAnswer(ctx context.Context, roomCode string, req model.SubmitAnswerRequest) (*model.AnswerCheckResponse, error) {
 	room, err := s.q.GetRoomByCode(ctx, roomCode)
 	if err != nil {
 		return nil, fmt.Errorf("get room: %w", err)
+	}
+
+	if room.Status != "playing" {
+		return nil, fmt.Errorf("game is not in progress")
 	}
 
 	quiz, err := s.q.GetQuizByID(ctx, room.QuizID)
@@ -39,6 +54,12 @@ func (s *GameService) SubmitAnswer(ctx context.Context, roomCode string, req mod
 
 	if req.QuestionIndex < 0 || req.QuestionIndex >= len(questions) {
 		return nil, fmt.Errorf("invalid question index: %d", req.QuestionIndex)
+	}
+
+	if s.hub != nil {
+		if err := s.hub.CanAnswer(roomCode, req.PlayerID, req.QuestionIndex, len(questions)); err != nil {
+			return nil, err
+		}
 	}
 
 	question := questions[req.QuestionIndex]
@@ -88,6 +109,10 @@ func (s *GameService) SubmitAnswer(ctx context.Context, roomCode string, req mod
 		return nil, fmt.Errorf("update score: %w", err)
 	}
 
+	if s.hub != nil {
+		s.hub.MarkAnswered(roomCode, req.PlayerID, req.QuestionIndex)
+	}
+
 	return &model.AnswerCheckResponse{
 		Correct:     isCorrect,
 		CorrectIDs:  correctIDs,
@@ -118,6 +143,27 @@ func (s *GameService) SaveResult(ctx context.Context, roomCode string, req model
 		userUUID = player.UserID
 	}
 
+	if existing, err := s.q.GetGameResultByPlayer(ctx, sqlc.GetGameResultByPlayerParams{
+		RoomID:   room.ID,
+		PlayerID: playerUUID,
+	}); err == nil {
+		if s.hub != nil {
+			s.hub.BroadcastLeaderboard(ctx, roomCode)
+		}
+		return &model.GameResultResponse{
+			Code:           roomCode,
+			PlayerID:       uuidToString(existing.PlayerID),
+			PlayerName:     existing.PlayerName,
+			UserID:         uuidToString(existing.UserID),
+			Score:          int(existing.Score),
+			CorrectAnswers: int(existing.CorrectAnswers),
+			TotalQuestions: int(existing.TotalQuestions),
+			QuizName:       existing.QuizName,
+			QuizCode:       quiz.Code,
+			FinishedAt:     existing.FinishedAt.Time,
+		}, nil
+	}
+
 	result, err := s.q.CreateGameResult(ctx, sqlc.CreateGameResultParams{
 		RoomID:         room.ID,
 		PlayerID:       playerUUID,
@@ -131,6 +177,10 @@ func (s *GameService) SaveResult(ctx context.Context, roomCode string, req model
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create result: %w", err)
+	}
+
+	if s.hub != nil {
+		s.hub.BroadcastLeaderboard(ctx, roomCode)
 	}
 
 	return &model.GameResultResponse{
