@@ -7,6 +7,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import { getRoom, getQuiz, joinRoom, updateReady, startGame } from "@/utils/api";
 import type { RoomResponse, QuizResponse } from "@/utils/api";
+import { ensureProfile, savePlayerId, getPlayerId, formatRoomCode } from "@/utils/storage";
 
 function RoomPageContent() {
     const router = useRouter();
@@ -14,58 +15,58 @@ function RoomPageContent() {
     const searchParams = useSearchParams();
     const code = (params.code as string)?.toUpperCase() || "";
     const isHost = searchParams.get('host') === 'true';
-    
+
     const [room, setRoom] = useState<RoomResponse | null>(null);
     const [quiz, setQuiz] = useState<QuizResponse | null>(null);
     const [isReady, setIsReady] = useState(false);
     const [loading, setLoading] = useState(true);
     const [playerId, setPlayerId] = useState<string>("");
 
-    const formatRoomCode = (c: string) => c.replace(/^(.{4})(.{4})$/, "$1-$2");
-
-    const loadData = useCallback(async () => {
-        try {
-            const [roomData, quizData] = await Promise.all([
-                getRoom(code),
-                getQuiz(code),
-            ]);
-            setRoom(roomData);
-            setQuiz(quizData);
-        } catch (err) {
-            console.error("Ошибка загрузки:", err);
-        } finally {
-            setLoading(false);
-        }
+    const loadRoomAndQuiz = useCallback(async (): Promise<{ room: RoomResponse; quiz: QuizResponse } | null> => {
+        const roomData = await getRoom(code);
+        const quizData = await getQuiz(roomData.quizCode);
+        setRoom(roomData);
+        setQuiz(quizData);
+        return { room: roomData, quiz: quizData };
     }, [code]);
 
     useEffect(() => {
-        const storedId = localStorage.getItem("vk_quiz_player_id");
-        if (storedId) {
-            setPlayerId(storedId);
-        }
+        const init = async () => {
+            try {
+                const profile = await ensureProfile();
 
-        if (isHost) {
-            loadData();
-        } else {
-            const doJoin = async () => {
-                try {
-                    const roomData = await joinRoom(code, "Игрок");
+                if (isHost) {
+                    const data = await loadRoomAndQuiz();
+                    if (data) {
+                        const storedPlayer = getPlayerId();
+                        if (storedPlayer && data.room.players.some((p) => p.id === storedPlayer)) {
+                            setPlayerId(storedPlayer);
+                        } else if (data.room.hostId) {
+                            setPlayerId(data.room.hostId);
+                            savePlayerId(data.room.hostId);
+                        }
+                    }
+                } else {
+                    const roomData = await joinRoom(code, profile.name, profile.id);
                     setRoom(roomData);
-                    const lastPlayer = roomData.players[roomData.players.length - 1];
-                    setPlayerId(lastPlayer.id);
-                    localStorage.setItem("vk_quiz_player_id", lastPlayer.id);
-                    const quizData = await getQuiz(code);
+                    const mine = roomData.players.find((p) => p.userId === profile.id)
+                        || roomData.players[roomData.players.length - 1];
+                    if (mine) {
+                        setPlayerId(mine.id);
+                        savePlayerId(mine.id);
+                    }
+                    const quizData = await getQuiz(roomData.quizCode);
                     setQuiz(quizData);
-                } catch (err) {
-                    console.error("Ошибка подключения:", err);
-                    alert("Не удалось присоединиться к комнате");
-                } finally {
-                    setLoading(false);
                 }
-            };
-            doJoin();
-        }
-    }, [code, isHost, loadData]);
+            } catch (err) {
+                console.error("Ошибка инициализации комнаты:", err);
+                alert("Не удалось подключиться к комнате");
+            } finally {
+                setLoading(false);
+            }
+        };
+        init();
+    }, [code, isHost, loadRoomAndQuiz]);
 
     // Polling for room updates
     useEffect(() => {
@@ -115,9 +116,8 @@ function RoomPageContent() {
 
     return (
         <div className="w-screen h-screen bg-white">
-            {/* Хедер */}
-            <div className="sticky top-0 z-50 flex items-center justify-between px-8 py-6 
-                border-b border-gray-400/20 
+            <div className="sticky top-0 z-50 flex items-center justify-between px-8 py-6
+                border-b border-gray-400/20
                 bg-white/70 backdrop-blur-sm">
                 <div className="flex items-center gap-3">
                     <Image
@@ -145,9 +145,7 @@ function RoomPageContent() {
                 </Button>
             </div>
 
-            {/* Основное содержимое */}
             <div className="flex h-[calc(100vh-100px)] bg-linear-to-br from-blue-50 to-zinc-50">
-                {/* Левая часть - Игроки */}
                 <div className="w-1/4 border-r border-gray-200 bg-opacity-50 p-8 overflow-y-auto">
                     <h2 className="text-xl font-semibold text-gray-800 mb-6">
                         Игроки ({room.players.length})
@@ -184,7 +182,6 @@ function RoomPageContent() {
                     )}
                 </div>
 
-                {/* Центральная часть - Информация о квизе */}
                 <div className="flex-1 flex items-center justify-center p-8 bg-opacity-50">
                     <div className="text-center">
                         <div className="mb-8">
@@ -232,7 +229,7 @@ function RoomPageContent() {
                                         {isReady ? "✓ Готов" : "Приготовиться"}
                                     </Button>
                                     <p className="text-sm text-gray-500">
-                                        {isReady 
+                                        {isReady
                                             ? "Вы готовы! Ждём остальных игроков..."
                                             : "Нажмите, когда будете готовы к игре"
                                         }
@@ -243,7 +240,6 @@ function RoomPageContent() {
                     </div>
                 </div>
 
-                {/* Правая часть - Статистика */}
                 <div className="w-1/4 border-l border-gray-200 p-8 bg-opacity-50">
                     <h2 className="text-xl font-semibold text-gray-800 mb-6">
                         Информация о квизе
@@ -268,7 +264,7 @@ function RoomPageContent() {
                         <div className="p-4 bg-white border-gray-200 border rounded-xl">
                             <p className="text-xs text-gray-500 mb-1">Сложность</p>
                             <p className="text-lg font-bold text-purple-600">
-                                {quiz.settings.difficulty === 'easy' ? 'Лёгкая' : 
+                                {quiz.settings.difficulty === 'easy' ? 'Лёгкая' :
                                  quiz.settings.difficulty === 'medium' ? 'Средняя' : 'Сложная'}
                             </p>
                         </div>

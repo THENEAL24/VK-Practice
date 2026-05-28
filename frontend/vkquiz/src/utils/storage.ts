@@ -1,158 +1,163 @@
-// Типы данных
-export interface QuizAnswer {
-  id: number;
-  text: string;
-  isCorrect: boolean;
-}
+import {
+  createUser as apiCreateUser,
+  getUser as apiGetUser,
+  updateUser as apiUpdateUser,
+  getMe,
+  setAuthToken,
+  getAuthToken,
+  logout as apiLogout,
+  ApiError,
+  UserResponse,
+} from "./api";
 
-export interface QuizQuestion {
-  id: number;
-  question: string;
-  answers: QuizAnswer[];
-}
+const STORAGE_KEYS = {
+  PROFILE: "vk_quiz_profile",
+  PLAYER_ID: "vk_quiz_player_id",
+  LAST_RESULT: "vk_quiz_last_result",
+} as const;
 
-export interface QuizSettings {
-  name: string;
-  difficulty: string;
-  questionsCount: number;
-  timePerQuestion: number;
-  isPublic: boolean;
-}
-
-export interface Quiz {
-  code: string;
-  settings: QuizSettings;
-  questions: QuizQuestion[];
-  createdAt: string;
-}
-
-export interface Player {
+export interface LocalProfile {
   id: string;
   name: string;
-  isReady: boolean;
-  score: number;
+  nickname: string;
+  email?: string;
+  isAuthenticated: boolean;
 }
 
-export interface Room {
-  code: string;
-  quizCode: string;
-  hostId: string;
-  players: Player[];
-  status: 'waiting' | 'playing' | 'finished';
-  currentQuestion: number;
-}
-
-// Функции для работы с localStorage
-const STORAGE_KEYS = {
-  QUIZZES: 'vk_quiz_quizzes',
-  ROOMS: 'vk_quiz_rooms',
-  CURRENT_PLAYER: 'vk_quiz_current_player',
-};
-
-// === КВИЗЫ ===
-export const saveQuiz = (quiz: Quiz): void => {
-  const quizzes = getQuizzes();
-  const existingIndex = quizzes.findIndex(q => q.code === quiz.code);
-  
-  if (existingIndex >= 0) {
-    quizzes[existingIndex] = quiz;
-  } else {
-    quizzes.push(quiz);
-  }
-  
-  localStorage.setItem(STORAGE_KEYS.QUIZZES, JSON.stringify(quizzes));
-};
-
-export const getQuizzes = (): Quiz[] => {
-  if (typeof window === 'undefined') return [];
-  const data = localStorage.getItem(STORAGE_KEYS.QUIZZES);
-  return data ? JSON.parse(data) : [];
-};
-
-export const getQuizByCode = (code: string): Quiz | null => {
-  const quizzes = getQuizzes();
-  return quizzes.find(q => q.code === code) || null;
-};
-
-export const deleteQuiz = (code: string): void => {
-  const quizzes = getQuizzes().filter(q => q.code !== code);
-  localStorage.setItem(STORAGE_KEYS.QUIZZES, JSON.stringify(quizzes));
-};
-
-// === КОМНАТЫ ===
-export const saveRoom = (room: Room): void => {
-  const rooms = getRooms();
-  const existingIndex = rooms.findIndex(r => r.code === room.code);
-  
-  if (existingIndex >= 0) {
-    rooms[existingIndex] = room;
-  } else {
-    rooms.push(room);
-  }
-  
-  localStorage.setItem(STORAGE_KEYS.ROOMS, JSON.stringify(rooms));
-};
-
-export const getRooms = (): Room[] => {
-  if (typeof window === 'undefined') return [];
-  const data = localStorage.getItem(STORAGE_KEYS.ROOMS);
-  return data ? JSON.parse(data) : [];
-};
-
-export const getRoomByCode = (code: string): Room | null => {
-  const rooms = getRooms();
-  return rooms.find(r => r.code === code) || null;
-};
-
-export const deleteRoom = (code: string): void => {
-  const rooms = getRooms().filter(r => r.code !== code);
-  localStorage.setItem(STORAGE_KEYS.ROOMS, JSON.stringify(rooms));
-};
-
-// === ТЕКУЩИЙ ИГРОК ===
-export const saveCurrentPlayer = (player: Player): void => {
-  localStorage.setItem(STORAGE_KEYS.CURRENT_PLAYER, JSON.stringify(player));
-};
-
-export const getCurrentPlayer = (): Player | null => {
-  if (typeof window === 'undefined') return null;
-  const data = localStorage.getItem(STORAGE_KEYS.CURRENT_PLAYER);
-  return data ? JSON.parse(data) : null;
-};
-
-// === УТИЛИТЫ ===
-export const generateRoomCode = (): string => {
-  return Math.random().toString(36).substring(2, 10).toUpperCase();
-};
-
-export const formatRoomCode = (code: string): string => {
-  return code.replace(/^(.{4})(.{4})$/, "$1-$2");
-};
-
-export const createDefaultPlayer = (name: string = "Игрок"): Player => {
+function fromRemote(user: UserResponse, isAuthenticated: boolean): LocalProfile {
   return {
-    id: Math.random().toString(36).substring(7),
-    name,
-    isReady: false,
-    score: 0,
+    id: user.id,
+    name: user.name,
+    nickname: user.nickname,
+    email: user.email,
+    isAuthenticated,
   };
-};
+}
 
-// === УТИЛИТЫ ДЛЯ ОТЛАДКИ ===
-// Вызовите в консоли браузера: window.VKQuizDebug.showAll()
-if (typeof window !== 'undefined') {
-  (window as any).VKQuizDebug = {
-    showAll: () => {
-      console.log('=== VK Quiz Storage ===');
-      console.log('Quizzes:', getQuizzes());
-      console.log('Rooms:', getRooms());
-      console.log('Last Result:', localStorage.getItem('vk_quiz_last_result'));
-    },
-    clearAll: () => {
-      localStorage.removeItem(STORAGE_KEYS.QUIZZES);
-      localStorage.removeItem(STORAGE_KEYS.ROOMS);
-      localStorage.removeItem('vk_quiz_last_result');
-      console.log('✅ Storage cleared!');
-    },
+export function getProfile(): LocalProfile | null {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem(STORAGE_KEYS.PROFILE);
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as LocalProfile;
+  } catch {
+    return null;
+  }
+}
+
+export function saveProfile(profile: LocalProfile): void {
+  localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(profile));
+}
+
+export function clearProfile(): void {
+  localStorage.removeItem(STORAGE_KEYS.PROFILE);
+}
+
+function randomNickSuffix(): string {
+  return Math.random().toString(36).slice(2, 7);
+}
+
+function generateGuestProfile(): { name: string; nickname: string } {
+  return {
+    name: "Игрок",
+    nickname: `player_${randomNickSuffix()}`,
   };
+}
+
+/**
+ * Ensures we have *some* identity: either an authenticated user (from session token),
+ * or a lightweight guest profile (legacy fallback).
+ */
+export async function ensureProfile(): Promise<LocalProfile> {
+  const token = getAuthToken();
+  if (token) {
+    try {
+      const me = await getMe();
+      const p = fromRemote(me, true);
+      saveProfile(p);
+      return p;
+    } catch (err) {
+      if (err instanceof ApiError && (err.status === 401 || err.status === 404)) {
+        setAuthToken("");
+        clearProfile();
+      } else {
+        // Network issue — fall back to whatever we have locally
+        const local = getProfile();
+        if (local) return local;
+      }
+    }
+  }
+
+  const local = getProfile();
+  if (local && !local.isAuthenticated) {
+    try {
+      const remote = await apiGetUser(local.id);
+      const merged = fromRemote(remote, false);
+      saveProfile(merged);
+      return merged;
+    } catch {
+      clearProfile();
+    }
+  }
+
+  const guest = generateGuestProfile();
+  let created: UserResponse | null = null;
+  for (let attempt = 0; attempt < 5 && !created; attempt++) {
+    try {
+      created = await apiCreateUser(
+        guest.name,
+        attempt === 0 ? guest.nickname : `${guest.nickname}_${attempt}`
+      );
+    } catch {
+      guest.nickname = `player_${randomNickSuffix()}`;
+    }
+  }
+  if (!created) throw new Error("Не удалось создать профиль");
+
+  const profile = fromRemote(created, false);
+  saveProfile(profile);
+  return profile;
+}
+
+export async function updateProfile(name: string, nickname: string): Promise<LocalProfile> {
+  const local = getProfile();
+  if (!local) throw new Error("Профиль не найден");
+  const updated = await apiUpdateUser(local.id, name, nickname);
+  const next = fromRemote(updated, local.isAuthenticated);
+  saveProfile(next);
+  return next;
+}
+
+/** Persists a freshly-obtained session: token + user. Replaces any previous (guest) profile. */
+export function applySession(token: string, user: UserResponse): LocalProfile {
+  setAuthToken(token);
+  const profile = fromRemote(user, true);
+  saveProfile(profile);
+  return profile;
+}
+
+export async function signOut(): Promise<void> {
+  try {
+    await apiLogout();
+  } catch {
+    // ignore
+  }
+  setAuthToken("");
+  clearProfile();
+}
+
+export const PLAYER_ID_KEY = STORAGE_KEYS.PLAYER_ID;
+export const LAST_RESULT_KEY = STORAGE_KEYS.LAST_RESULT;
+
+export function getPlayerId(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(STORAGE_KEYS.PLAYER_ID) || "";
+}
+
+export function savePlayerId(id: string): void {
+  localStorage.setItem(STORAGE_KEYS.PLAYER_ID, id);
+}
+
+export function formatRoomCode(code: string): string {
+  return code.replace(/^(.{4})(.{4})$/, "$1-$2");
 }

@@ -20,6 +20,10 @@ type GameResult struct {
 	ID             pgtype.UUID        `json:"id"`
 	RoomID         pgtype.UUID        `json:"room_id"`
 	PlayerID       pgtype.UUID        `json:"player_id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	QuizID         pgtype.UUID        `json:"quiz_id"`
+	PlayerName     string             `json:"player_name"`
+	QuizName       string             `json:"quiz_name"`
 	Score          int32              `json:"score"`
 	CorrectAnswers int32              `json:"correct_answers"`
 	TotalQuestions int32              `json:"total_questions"`
@@ -29,6 +33,7 @@ type GameResult struct {
 type Player struct {
 	ID      pgtype.UUID `json:"id"`
 	RoomID  pgtype.UUID `json:"room_id"`
+	UserID  pgtype.UUID `json:"user_id"`
 	Name    string      `json:"name"`
 	IsReady bool        `json:"is_ready"`
 	Score   int32       `json:"score"`
@@ -49,6 +54,7 @@ type Quiz struct {
 	QuestionsCount  int32              `json:"questions_count"`
 	TimePerQuestion int32              `json:"time_per_question"`
 	IsPublic        bool               `json:"is_public"`
+	AuthorUserID    pgtype.UUID        `json:"author_user_id"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -60,4 +66,33 @@ type Room struct {
 	Status          string             `json:"status"`
 	CurrentQuestion int32              `json:"current_question"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+}
+
+type Session struct {
+	Token     string             `json:"token"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type User struct {
+	ID           pgtype.UUID        `json:"id"`
+	Name         string             `json:"name"`
+	Nickname     string             `json:"nickname"`
+	Email        pgtype.Text        `json:"email"`
+	PasswordHash pgtype.Text        `json:"password_hash"`
+	VkID         pgtype.Text        `json:"vk_id"`
+	IsVerified   bool               `json:"is_verified"`
+	VerifiedAt   pgtype.Timestamptz `json:"verified_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+type VerificationCode struct {
+	ID        pgtype.UUID        `json:"id"`
+	UserID    pgtype.UUID        `json:"user_id"`
+	Code      string             `json:"code"`
+	Purpose   string             `json:"purpose"`
+	ExpiresAt pgtype.Timestamptz `json:"expires_at"`
+	UsedAt    pgtype.Timestamptz `json:"used_at"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }

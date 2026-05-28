@@ -1,4 +1,12 @@
-.PHONY: up down build logs restart
+.PHONY: up down build logs restart miro-board
+
+# Создать доску Miro (нужен MIRO_ACCESS_TOKEN, см. scripts/miro/README.md)
+miro-board:
+	node scripts/miro/create-board.mjs
+
+# Проверить токен Miro без создания доски
+miro-check:
+	node scripts/miro/create-board.mjs --check-token
 
 # Поднять весь стек (Postgres + API + фронт)
 up:

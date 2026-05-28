@@ -4,14 +4,15 @@ import Image from "next/image";
 import { Button } from "@vkontakte/vkui";
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { getQuiz, submitAnswer, saveResult } from "@/utils/api";
+import { getRoom, getQuiz, submitAnswer, saveResult } from "@/utils/api";
 import type { QuizResponse, AnswerDTO } from "@/utils/api";
+import { getPlayerId, getProfile } from "@/utils/storage";
 
 export default function GamePage() {
   const router = useRouter();
   const params = useParams();
   const code = (params.code as string)?.toUpperCase() || "";
-  
+
   const [quiz, setQuiz] = useState<QuizResponse | null>(null);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(30);
@@ -20,13 +21,18 @@ export default function GamePage() {
   const [score, setScore] = useState(0);
   const [correctAnswersCount, setCorrectAnswersCount] = useState(0);
   const [serverCorrectIds, setServerCorrectIds] = useState<number[] | null>(null);
-
-  const playerId = typeof window !== "undefined" ? localStorage.getItem("vk_quiz_player_id") || "" : "";
+  const [playerId, setPlayerId] = useState<string>("");
+  const [userId, setUserId] = useState<string>("");
 
   useEffect(() => {
+    setPlayerId(getPlayerId());
+    const profile = getProfile();
+    if (profile) setUserId(profile.id);
+
     const load = async () => {
       try {
-        const data = await getQuiz(code);
+        const room = await getRoom(code);
+        const data = await getQuiz(room.quizCode);
         setQuiz(data);
         setTimeLeft(data.settings.timePerQuestion);
       } catch {
@@ -40,10 +46,9 @@ export default function GamePage() {
   const currentQuestion = quiz?.questions[currentQuestionIndex];
   const totalQuestions = quiz?.questions.length || 0;
 
-  // Timer
   useEffect(() => {
     if (!quiz || !currentQuestion) return;
-    
+
     if (timeLeft > 0 && !isAnswered) {
       const timer = setTimeout(() => setTimeLeft(timeLeft - 1), 1000);
       return () => clearTimeout(timer);
@@ -74,7 +79,6 @@ export default function GamePage() {
         setCorrectAnswersCount(prev => prev + 1);
       }
     } catch {
-      // Fallback: local check
       const correctIds = currentQuestion.answers
         .filter(a => a.isCorrect)
         .map(a => a.id);
@@ -100,11 +104,14 @@ export default function GamePage() {
       setTimeLeft(quiz.settings.timePerQuestion);
     } else {
       try {
-        await saveResult(code, playerId, score, correctAnswersCount, totalQuestions);
-      } catch { /* save locally as fallback */ }
-      
+        await saveResult(code, playerId, score, correctAnswersCount, totalQuestions, userId || undefined);
+      } catch (err) {
+        console.error("Не удалось сохранить результат:", err);
+      }
+
       localStorage.setItem('vk_quiz_last_result', JSON.stringify({
         code,
+        quizCode: quiz.code,
         score,
         correctAnswers: correctAnswersCount,
         totalQuestions,
@@ -123,7 +130,7 @@ export default function GamePage() {
 
   const getAnswerClassName = (answer: AnswerDTO) => {
     const baseClasses = "w-full p-4 rounded-xl text-left font-medium transition-all duration-200";
-    
+
     if (!isAnswered) {
       if (selectedAnswers.includes(answer.id)) {
         return `${baseClasses} bg-blue-500 text-white border-2 border-blue-600`;
@@ -157,7 +164,6 @@ export default function GamePage() {
 
   return (
     <div className="w-screen h-screen bg-linear-to-br from-blue-50 to-zinc-50">
-      {/* Хедер */}
       <div className="flex items-center justify-between px-8 py-4 border-b border-gray-200 bg-white">
         <div className="flex items-center gap-3">
           <Image
@@ -192,15 +198,13 @@ export default function GamePage() {
         </div>
       </div>
 
-      {/* Прогресс-бар */}
       <div className="w-full h-2 bg-gray-200">
-        <div 
+        <div
           className="h-full bg-blue-500 transition-all duration-300"
           style={{ width: `${((currentQuestionIndex + 1) / totalQuestions) * 100}%` }}
         />
       </div>
 
-      {/* Основной контент */}
       <div className="flex items-center justify-center p-8 h-[calc(100vh-150px)]">
         <div className="w-full max-w-4xl">
           <div className="bg-white rounded-3xl shadow-xl p-8 mb-6">
@@ -219,7 +223,7 @@ export default function GamePage() {
                   <div className="flex items-center gap-3">
                     <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold ${
                       isAnswered && isAnswerCorrect(answer)
-                        ? 'bg-white text-green-600' 
+                        ? 'bg-white text-green-600'
                         : isAnswered && selectedAnswers.includes(answer.id) && !isAnswerCorrect(answer)
                         ? 'bg-white text-red-600'
                         : selectedAnswers.includes(answer.id)
@@ -245,8 +249,8 @@ export default function GamePage() {
                 <Button
                   onClick={handleSubmitAnswer}
                   disabled={selectedAnswers.length === 0}
-                  className="w-full py-4 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 
-                           text-white rounded-xl font-semibold text-xl transition-all 
+                  className="w-full py-4 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300
+                           text-white rounded-xl font-semibold text-xl transition-all
                            disabled:cursor-not-allowed"
                 >
                   Ответить
@@ -260,7 +264,7 @@ export default function GamePage() {
                   </div>
                   <Button
                     onClick={handleNextQuestion}
-                    className="w-full py-4 bg-green-500 hover:bg-green-600 text-white 
+                    className="w-full py-4 bg-green-500 hover:bg-green-600 text-white
                              rounded-xl font-semibold text-xl transition-all"
                   >
                     {currentQuestionIndex < totalQuestions - 1 ? 'Следующий вопрос →' : 'Завершить игру'}

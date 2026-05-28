@@ -58,7 +58,7 @@ func (h *GameHandler) SaveResult(w http.ResponseWriter, r *http.Request) {
 func (h *GameHandler) GetResults(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
 
-	resp, err := h.svc.GetResults(r.Context(), code)
+	resp, err := h.svc.GetLeaderboard(r.Context(), code)
 	if err != nil {
 		if service.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "room not found")

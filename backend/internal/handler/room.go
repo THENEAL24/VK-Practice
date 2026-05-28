@@ -48,11 +48,7 @@ func (h *RoomHandler) Join(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.PlayerName == "" {
-		req.PlayerName = "Игрок"
-	}
-
-	resp, err := h.svc.JoinRoom(r.Context(), code, req.PlayerName)
+	resp, err := h.svc.JoinRoom(r.Context(), code, req)
 	if err != nil {
 		if service.IsNotFound(err) {
 			writeError(w, http.StatusNotFound, "room not found")

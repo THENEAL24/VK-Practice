@@ -25,6 +25,8 @@ func NewQuizService(pool *pgxpool.Pool) *QuizService {
 	}
 }
 
+// CreateQuiz persists a quiz with its questions/answers. It does NOT create a room.
+// Use LaunchQuiz to spawn a room when the host is ready to play.
 func (s *QuizService) CreateQuiz(ctx context.Context, req model.CreateQuizRequest) (*model.CreateQuizResponse, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -34,6 +36,7 @@ func (s *QuizService) CreateQuiz(ctx context.Context, req model.CreateQuizReques
 
 	qtx := s.q.WithTx(tx)
 	code := generateCode()
+	authorUUID := optionalUUID(req.UserID)
 
 	quiz, err := qtx.CreateQuiz(ctx, sqlc.CreateQuizParams{
 		Code:            code,
@@ -42,6 +45,7 @@ func (s *QuizService) CreateQuiz(ctx context.Context, req model.CreateQuizReques
 		QuestionsCount:  int32(req.Settings.QuestionsCount),
 		TimePerQuestion: int32(req.Settings.TimePerQuestion),
 		IsPublic:        req.Settings.IsPublic,
+		AuthorUserID:    authorUUID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create quiz: %w", err)
@@ -82,35 +86,15 @@ func (s *QuizService) CreateQuiz(ctx context.Context, req model.CreateQuizReques
 		})
 	}
 
-	room, err := qtx.CreateRoom(ctx, sqlc.CreateRoomParams{
-		Code:   code,
-		QuizID: quiz.ID,
-		Status: "waiting",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create room: %w", err)
-	}
-
-	hostPlayer, err := qtx.CreatePlayer(ctx, sqlc.CreatePlayerParams{
-		RoomID:  room.ID,
-		Name:    "Вы (Хост)",
-		IsReady: false,
-		Score:   0,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create host player: %w", err)
-	}
-
-	err = qtx.SetRoomHost(ctx, sqlc.SetRoomHostParams{
-		ID:           room.ID,
-		HostPlayerID: hostPlayer.ID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("set room host: %w", err)
-	}
-
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	authorNickname := ""
+	if authorUUID.Valid {
+		if u, err := s.q.GetUserByID(ctx, authorUUID); err == nil {
+			authorNickname = u.Nickname
+		}
 	}
 
 	return &model.CreateQuizResponse{
@@ -123,24 +107,12 @@ func (s *QuizService) CreateQuiz(ctx context.Context, req model.CreateQuizReques
 				TimePerQuestion: int(quiz.TimePerQuestion),
 				IsPublic:        quiz.IsPublic,
 			},
-			Questions: questions,
-			CreatedAt: quiz.CreatedAt.Time,
+			Questions:      questions,
+			CreatedAt:      quiz.CreatedAt.Time,
+			AuthorUserID:   uuidToString(quiz.AuthorUserID),
+			AuthorNickname: authorNickname,
 		},
-		Room: model.RoomResponse{
-			Code:            code,
-			QuizCode:        code,
-			HostID:          uuidToString(hostPlayer.ID),
-			Players: []model.PlayerDTO{
-				{
-					ID:      uuidToString(hostPlayer.ID),
-					Name:    hostPlayer.Name,
-					IsReady: hostPlayer.IsReady,
-					Score:   int(hostPlayer.Score),
-				},
-			},
-			Status:          "waiting",
-			CurrentQuestion: 0,
-		},
+		Room: nil,
 	}, nil
 }
 
@@ -149,7 +121,10 @@ func (s *QuizService) GetQuizByCode(ctx context.Context, code string) (*model.Qu
 	if err != nil {
 		return nil, fmt.Errorf("get quiz: %w", err)
 	}
+	return s.buildQuizResponse(ctx, quiz)
+}
 
+func (s *QuizService) buildQuizResponse(ctx context.Context, quiz sqlc.Quiz) (*model.QuizResponse, error) {
 	questions, err := s.q.GetQuestionsByQuizID(ctx, quiz.ID)
 	if err != nil {
 		return nil, fmt.Errorf("get questions: %w", err)
@@ -190,6 +165,13 @@ func (s *QuizService) GetQuizByCode(ctx context.Context, code string) (*model.Qu
 		})
 	}
 
+	authorNickname := ""
+	if quiz.AuthorUserID.Valid {
+		if u, err := s.q.GetUserByID(ctx, quiz.AuthorUserID); err == nil {
+			authorNickname = u.Nickname
+		}
+	}
+
 	return &model.QuizResponse{
 		Code: quiz.Code,
 		Settings: model.QuizSettingsDTO{
@@ -199,8 +181,149 @@ func (s *QuizService) GetQuizByCode(ctx context.Context, code string) (*model.Qu
 			TimePerQuestion: int(quiz.TimePerQuestion),
 			IsPublic:        quiz.IsPublic,
 		},
-		Questions: questionDTOs,
-		CreatedAt: quiz.CreatedAt.Time,
+		Questions:      questionDTOs,
+		CreatedAt:      quiz.CreatedAt.Time,
+		AuthorUserID:   uuidToString(quiz.AuthorUserID),
+		AuthorNickname: authorNickname,
+	}, nil
+}
+
+func (s *QuizService) ListPublicQuizzes(ctx context.Context, limit, offset int32) ([]model.QuizSummaryDTO, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	quizzes, err := s.q.ListPublicQuizzes(ctx, sqlc.ListPublicQuizzesParams{
+		Limit:  limit,
+		Offset: offset,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list quizzes: %w", err)
+	}
+	return s.toSummaries(ctx, quizzes), nil
+}
+
+func (s *QuizService) ListQuizzesByAuthor(ctx context.Context, userID string) ([]model.QuizSummaryDTO, error) {
+	uid := stringToUUID(userID)
+	if !uid.Valid {
+		return nil, fmt.Errorf("invalid user id")
+	}
+	quizzes, err := s.q.ListQuizzesByAuthor(ctx, uid)
+	if err != nil {
+		return nil, fmt.Errorf("list by author: %w", err)
+	}
+	return s.toSummaries(ctx, quizzes), nil
+}
+
+func (s *QuizService) toSummaries(ctx context.Context, quizzes []sqlc.Quiz) []model.QuizSummaryDTO {
+	authorCache := make(map[string]string)
+	out := make([]model.QuizSummaryDTO, 0, len(quizzes))
+	for _, q := range quizzes {
+		nickname := ""
+		if q.AuthorUserID.Valid {
+			authID := uuidToString(q.AuthorUserID)
+			if n, ok := authorCache[authID]; ok {
+				nickname = n
+			} else if u, err := s.q.GetUserByID(ctx, q.AuthorUserID); err == nil {
+				nickname = u.Nickname
+				authorCache[authID] = nickname
+			}
+		}
+		out = append(out, model.QuizSummaryDTO{
+			Code:            q.Code,
+			Name:            q.Name,
+			Difficulty:      q.Difficulty,
+			QuestionsCount:  int(q.QuestionsCount),
+			TimePerQuestion: int(q.TimePerQuestion),
+			IsPublic:        q.IsPublic,
+			AuthorUserID:    uuidToString(q.AuthorUserID),
+			AuthorNickname:  nickname,
+			CreatedAt:       q.CreatedAt.Time,
+		})
+	}
+	return out
+}
+
+// LaunchQuiz creates a new room for an existing quiz and returns it.
+func (s *QuizService) LaunchQuiz(ctx context.Context, quizCode string, req model.LaunchQuizRequest) (*model.CreateQuizResponse, error) {
+	quiz, err := s.q.GetQuizByCode(ctx, quizCode)
+	if err != nil {
+		return nil, fmt.Errorf("get quiz: %w", err)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	qtx := s.q.WithTx(tx)
+	roomCode := generateCode()
+
+	hostUUID := optionalUUID(req.UserID)
+	hostName := "Вы (Хост)"
+	if hostUUID.Valid {
+		if u, err := qtx.GetUserByID(ctx, hostUUID); err == nil {
+			hostName = u.Name
+		}
+	}
+
+	room, err := qtx.CreateRoom(ctx, sqlc.CreateRoomParams{
+		Code:   roomCode,
+		QuizID: quiz.ID,
+		Status: "waiting",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create room: %w", err)
+	}
+
+	hostPlayer, err := qtx.CreatePlayer(ctx, sqlc.CreatePlayerParams{
+		RoomID:  room.ID,
+		UserID:  hostUUID,
+		Name:    hostName,
+		IsReady: false,
+		Score:   0,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create host player: %w", err)
+	}
+
+	if err := qtx.SetRoomHost(ctx, sqlc.SetRoomHostParams{
+		ID:           room.ID,
+		HostPlayerID: hostPlayer.ID,
+	}); err != nil {
+		return nil, fmt.Errorf("set host: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	quizResp, err := s.buildQuizResponse(ctx, quiz)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.CreateQuizResponse{
+		Quiz: *quizResp,
+		Room: &model.RoomResponse{
+			Code:     room.Code,
+			QuizCode: quiz.Code,
+			HostID:   uuidToString(hostPlayer.ID),
+			Players: []model.PlayerDTO{
+				{
+					ID:      uuidToString(hostPlayer.ID),
+					Name:    hostPlayer.Name,
+					IsReady: hostPlayer.IsReady,
+					Score:   int(hostPlayer.Score),
+					UserID:  uuidToString(hostPlayer.UserID),
+				},
+			},
+			Status:          "waiting",
+			CurrentQuestion: 0,
+		},
 	}, nil
 }
 
@@ -243,6 +366,14 @@ func stringToUUID(s string) pgtype.UUID {
 	u.Bytes = parsed
 	u.Valid = true
 	return u
+}
+
+// optionalUUID returns a valid UUID or an invalid one (NULL) if input is empty/invalid.
+func optionalUUID(s string) pgtype.UUID {
+	if s == "" {
+		return pgtype.UUID{}
+	}
+	return stringToUUID(s)
 }
 
 func parseUUID(s string) ([16]byte, error) {

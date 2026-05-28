@@ -4,8 +4,9 @@ import Image from "next/image";
 import { Button } from "@vkontakte/vkui";
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createQuiz } from "@/utils/api";
+import { createQuiz, launchQuiz } from "@/utils/api";
 import type { QuestionDTO, AnswerDTO } from "@/utils/api";
+import { ensureProfile, savePlayerId } from "@/utils/storage";
 
 interface Question {
   id: number;
@@ -40,7 +41,7 @@ function CreateQuestionsContent() {
     setQuestions(initialQuestions);
   }, [quizSettings.questionsCount]);
 
-  const updateQuestion = (field: keyof Question, value: any) => {
+  const updateQuestion = <K extends keyof Question>(field: K, value: Question[K]) => {
     const newQuestions = [...questions];
     newQuestions[currentQuestion] = {
       ...newQuestions[currentQuestion],
@@ -105,10 +106,20 @@ function CreateQuestionsContent() {
   };
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showFinishModal, setShowFinishModal] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const handleFinish = async () => {
+  const openFinishModal = () => {
+    setSubmitError(null);
+    setShowFinishModal(true);
+  };
+
+  const persistQuiz = async (autoLaunch: boolean) => {
     setIsSubmitting(true);
+    setSubmitError(null);
     try {
+      const profile = await ensureProfile();
+
       const apiQuestions: QuestionDTO[] = questions.map((q) => ({
         id: q.id,
         question: q.question,
@@ -119,7 +130,7 @@ function CreateQuestionsContent() {
         })),
       }));
 
-      const resp = await createQuiz(
+      const created = await createQuiz(
         {
           name: quizSettings.name,
           difficulty: quizSettings.difficulty,
@@ -127,16 +138,28 @@ function CreateQuestionsContent() {
           timePerQuestion: quizSettings.timePerQuestion,
           isPublic: quizSettings.isPublic,
         },
-        apiQuestions
+        apiQuestions,
+        profile.id
       );
 
-      const hostId = resp.room.hostId;
-      localStorage.setItem("vk_quiz_player_id", hostId);
+      if (autoLaunch) {
+        const launched = await launchQuiz(created.quiz.code, profile.id);
+        if (launched.room) {
+          savePlayerId(launched.room.hostId);
+          router.push(`/room/${launched.room.code}?host=true`);
+          return;
+        }
+        throw new Error("Бэкенд не вернул комнату при запуске");
+      }
 
-      router.push(`/room/${resp.room.code}?host=true`);
+      router.push("/quizzes");
     } catch (err) {
       console.error("Ошибка создания квиза:", err);
-      alert("Не удалось создать квиз. Проверьте соединение с сервером.");
+      setSubmitError(
+        err instanceof Error
+          ? err.message
+          : "Не удалось создать квиз. Проверьте соединение с сервером."
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -177,11 +200,11 @@ function CreateQuestionsContent() {
             Назад
           </Button>
           <Button 
-            onClick={handleFinish}
-            disabled={!allQuestionsValid}
+            onClick={openFinishModal}
+            disabled={!allQuestionsValid || isSubmitting}
             className="bg-green-500 hover:bg-green-600 disabled:bg-gray-300 px-6 py-2 rounded-xl font-semibold text-white transition-all disabled:cursor-not-allowed"
           >
-            Завершить
+            {isSubmitting ? "Сохраняем..." : "Завершить"}
           </Button>
         </div>
       </div>
@@ -335,6 +358,74 @@ function CreateQuestionsContent() {
           </div>
         </div>
       </div>
+
+      {showFinishModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => !isSubmitting && setShowFinishModal(false)}
+        >
+          <div
+            className="bg-white rounded-3xl shadow-2xl max-w-lg w-full p-8"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="text-center mb-6">
+              <div className="text-5xl mb-3">🎉</div>
+              <h3 className="text-2xl font-semibold text-gray-800 mb-2">Квиз готов!</h3>
+              <p className="text-gray-500">
+                Что сделать с квизом <span className="font-semibold text-gray-700">«{quizSettings.name}»</span>?
+              </p>
+            </div>
+
+            {submitError && (
+              <div className="mb-4 p-3 rounded-xl text-sm bg-red-50 text-red-700">
+                {submitError}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <button
+                disabled={isSubmitting}
+                onClick={() => persistQuiz(true)}
+                className="w-full p-4 text-left rounded-2xl border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="text-3xl">🎮</div>
+                  <div>
+                    <p className="font-semibold text-gray-800">Запустить сразу</p>
+                    <p className="text-sm text-gray-500">
+                      Создаст комнату — вы станете хостом и сможете пригласить игроков
+                    </p>
+                  </div>
+                </div>
+              </button>
+
+              <button
+                disabled={isSubmitting}
+                onClick={() => persistQuiz(false)}
+                className="w-full p-4 text-left rounded-2xl border-2 border-gray-200 bg-white hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                <div className="flex items-start gap-3">
+                  <div className="text-3xl">📚</div>
+                  <div>
+                    <p className="font-semibold text-gray-800">Сохранить в каталог</p>
+                    <p className="text-sm text-gray-500">
+                      Квиз появится в каталоге, и его можно будет запустить позже
+                    </p>
+                  </div>
+                </div>
+              </button>
+            </div>
+
+            <button
+              onClick={() => setShowFinishModal(false)}
+              disabled={isSubmitting}
+              className="w-full mt-4 py-2 text-sm text-gray-500 hover:text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

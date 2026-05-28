@@ -6,7 +6,6 @@ import (
 
 	"github.com/THENEAL24/VK-Practice/backend/db/sqlc"
 	"github.com/THENEAL24/VK-Practice/backend/internal/model"
-	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -109,9 +108,23 @@ func (s *GameService) SaveResult(ctx context.Context, roomCode string, req model
 	}
 
 	playerUUID := stringToUUID(req.PlayerID)
-	_, err = s.q.CreateGameResult(ctx, sqlc.CreateGameResultParams{
+	player, err := s.q.GetPlayerByID(ctx, playerUUID)
+	if err != nil {
+		return nil, fmt.Errorf("get player: %w", err)
+	}
+
+	userUUID := optionalUUID(req.UserID)
+	if !userUUID.Valid {
+		userUUID = player.UserID
+	}
+
+	result, err := s.q.CreateGameResult(ctx, sqlc.CreateGameResultParams{
 		RoomID:         room.ID,
 		PlayerID:       playerUUID,
+		UserID:         userUUID,
+		QuizID:         quiz.ID,
+		PlayerName:     player.Name,
+		QuizName:       quiz.Name,
 		Score:          int32(req.Score),
 		CorrectAnswers: int32(req.CorrectAnswers),
 		TotalQuestions: int32(req.TotalQuestions),
@@ -122,14 +135,19 @@ func (s *GameService) SaveResult(ctx context.Context, roomCode string, req model
 
 	return &model.GameResultResponse{
 		Code:           roomCode,
-		Score:          req.Score,
-		CorrectAnswers: req.CorrectAnswers,
-		TotalQuestions: req.TotalQuestions,
-		QuizName:       quiz.Name,
+		PlayerID:       uuidToString(result.PlayerID),
+		PlayerName:     result.PlayerName,
+		UserID:         uuidToString(result.UserID),
+		Score:          int(result.Score),
+		CorrectAnswers: int(result.CorrectAnswers),
+		TotalQuestions: int(result.TotalQuestions),
+		QuizName:       result.QuizName,
+		QuizCode:       quiz.Code,
+		FinishedAt:     result.FinishedAt.Time,
 	}, nil
 }
 
-func (s *GameService) GetResults(ctx context.Context, roomCode string) ([]model.GameResultResponse, error) {
+func (s *GameService) GetLeaderboard(ctx context.Context, roomCode string) (*model.LeaderboardResponse, error) {
 	room, err := s.q.GetRoomByCode(ctx, roomCode)
 	if err != nil {
 		return nil, fmt.Errorf("get room: %w", err)
@@ -145,29 +163,25 @@ func (s *GameService) GetResults(ctx context.Context, roomCode string) ([]model.
 		return nil, fmt.Errorf("get results: %w", err)
 	}
 
-	playerIDs := make([]pgtype.UUID, 0, len(results))
+	entries := make([]model.GameResultResponse, 0, len(results))
 	for _, r := range results {
-		playerIDs = append(playerIDs, r.PlayerID)
-	}
-
-	playerMap := make(map[string]string)
-	for _, pid := range playerIDs {
-		p, err := s.q.GetPlayerByID(ctx, pid)
-		if err == nil {
-			playerMap[uuidToString(p.ID)] = p.Name
-		}
-	}
-
-	var resp []model.GameResultResponse
-	for _, r := range results {
-		resp = append(resp, model.GameResultResponse{
+		entries = append(entries, model.GameResultResponse{
 			Code:           roomCode,
+			PlayerID:       uuidToString(r.PlayerID),
+			PlayerName:     r.PlayerName,
+			UserID:         uuidToString(r.UserID),
 			Score:          int(r.Score),
 			CorrectAnswers: int(r.CorrectAnswers),
 			TotalQuestions: int(r.TotalQuestions),
-			QuizName:       quiz.Name,
+			QuizName:       r.QuizName,
+			QuizCode:       quiz.Code,
+			FinishedAt:     r.FinishedAt.Time,
 		})
 	}
 
-	return resp, nil
+	return &model.LeaderboardResponse{
+		Code:     roomCode,
+		QuizName: quiz.Name,
+		Entries:  entries,
+	}, nil
 }
